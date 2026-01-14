@@ -23,46 +23,42 @@ jobs:
      - name: Check for Updates
        id: check
        run: |
-         # Store current version info
-         OLD_CONTENT=$(cat versions.json)
-
-         # Get latest version and properly encode the URL
+         # 1. Safely read old content
+         OLD_CONTENT=""
+         if [ -f "versions.json" ]; then
+           OLD_CONTENT=$(cat versions.json)
+         fi
+ 
+         # 2. Get latest version info
          LATEST=$(curl -s 'https://mirror.cachyos.org/repo/x86_64_v3/cachyos-v3/' | grep -Po 'proton-cachyos-1:\d+\.\d+\.\d+-\d+-x86_64_v3\.pkg\.tar\.zst' | sort -V | tail -n1)
-         ENCODED_LATEST=${LATEST//:/%3A}
          
+         # Check if we actually found a version to avoid empty variables
+         if [ -z "$LATEST" ]; then
+           echo "Error: Could not fetch latest version from mirror"
+           exit 1
+         fi
+ 
+         ENCODED_LATEST=${LATEST//:/%3A}
          BASE=$(echo $LATEST | grep -Po '(?<=:)\d+\.\d+(?=\.)')
          RELEASE=$(echo $LATEST | grep -Po '\d+(?=-\d+-x86_64)')
-
-         # Download file to temporary location
+ 
+         # 3. Download and Hash
          TEMP_FILE=$(mktemp)
          curl -L "https://mirror.cachyos.org/repo/x86_64_v3/cachyos-v3/${ENCODED_LATEST}" -o "$TEMP_FILE"
-
-         # Get hash of the downloaded file
          HASH=$(nix hash file --base64 --type sha256 "$TEMP_FILE")
          rm "$TEMP_FILE"
-
-         # Debug Variables
-         echo "LATEST: $LATEST"
-         echo "ENCODED_LATEST: $ENCODED_LATEST"
-         echo "BASE: $BASE"
-         echo "RELEASE: $RELEASE"
-         echo "HASH: $HASH"
-
-         # Create new versions.json content
-         NEW_CONTENT=$(cat <<EOF
-         {
-           "base": "$BASE",
-           "release": "$RELEASE",
-           "hash": "sha256-$HASH"
-         }
-         EOF
-         )
-
-         # Compare old and new content
-         if [ "$OLD_CONTENT" = "$NEW_CONTENT" ]; then
+ 
+         # 4. Construct JSON (using a single line to avoid Here-Doc indentation issues)
+         NEW_CONTENT="{\"base\": \"$BASE\", \"release\": \"$RELEASE\", \"hash\": \"sha256-$HASH\"}"
+ 
+         # 5. Comparison (Using jq is safer, but string comparison works if formatting is consistent)
+         # We strip whitespace for the comparison to be safe
+         if [ "$(echo $OLD_CONTENT | tr -d '[:space:]')" = "$(echo $NEW_CONTENT | tr -d '[:space:]')" ]; then
            echo "No updates available"
            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
          else
+           echo "New version detected!"
+           # Use jq to format it nicely if available, or just echo
            echo "$NEW_CONTENT" > versions.json
            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
          fi
@@ -71,7 +67,7 @@ jobs:
        if: env.UPDATE_NEEDED == 'true'
        uses: peter-evans/create-pull-request@v5
        with:
-         token: ${{ secrets.PAT }}
+         token: ${{ secrets.GITHUB_TOKEN }}
          commit-message: 'proton-cachyos: update to latest version'
          title: 'Update proton-cachyos'
          body: |
